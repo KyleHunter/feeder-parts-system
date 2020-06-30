@@ -8,6 +8,7 @@ import time
 # PARTS FEEDER SYSTEM
 #
 # VIOS FILE (xxx.txt) -> extracted job data (extracted_job_data) -> sync'd job data (sync_job_data)
+# match_job_status
 # Feeders data - separate csv with all physical feeder info
 
 
@@ -132,6 +133,15 @@ def write_syncd_job_data(loc, data):
             writer.writerow(i)
 
 
+def write_match_job_status(first_one, loc, data):
+    with open(loc, 'w', newline='') as file:
+        writer = csv.writer(file)
+        if first_one:
+            writer.writerow(["MANF PART NO", "FIRST MATCH", "SECOND MATCH"])
+
+        writer.writerow(data)
+
+
 def main_window_layout():
     sg.theme('Dark Grey 4')
 
@@ -232,7 +242,7 @@ def get_feeder_slot(job_feeder_data_loc, part_no):
         feeder_info = csv.DictReader(file, delimiter=',')
         for row in feeder_info:
             if row["MANF PART NO"] == part_no:
-                return row["FEEDER SLOT"]
+                return row["SLOT"]
 
 
 # Returns the feeder id from the syncd job data based on manf part no
@@ -242,6 +252,58 @@ def get_feeder_id(job_feeder_data_loc, part_no):
         for row in feeder_info:
             if row["MANF PART NO"] == part_no:
                 return row["FEEDER ID"]
+
+
+def valid_ecia_2d_code(code):
+    return "[)>{RS}06{GS}" in code
+
+
+def remove_prefix(text, prefix):
+    return text[text.startswith(prefix) and len(prefix):]
+
+
+def return_ecia_fields(line):
+    data_identifiers = ["1T", "1P", "6D", "4L", "P", "Q", "9D", "10D"]
+    field_names = ["lot_code", "supplier_part_number", "ship_date",
+                   "country_of_origin", "customer_part_number", "Quantity", "date_code_1", "date_code_2"]
+
+    for i in range(0, len(data_identifiers)):
+        if str(line).startswith(data_identifiers[i]):
+            return field_names[i], remove_prefix(line, data_identifiers[i])
+    return None
+
+
+def extract_ecia_2d_code(code):
+    if not valid_ecia_2d_code(code):
+        return None
+
+    try:
+        temp_dict = {}
+        temp = str(code).split("{GS}")
+        temp.remove("[)>{RS}06")
+    except ValueError:
+        return None
+
+    for val in temp:
+        extracted = return_ecia_fields(val)
+        if extracted:
+            temp_dict[extracted[0]] = extracted[1]
+
+    return temp_dict
+
+
+def valid_physical_feeder(code):
+    return "[)>{FID}" in code
+
+
+def extract_physical_feeder_id(code):
+    if not valid_physical_feeder(code):
+        return None
+    try:
+        f_id = str(code).split("[)>{FID}")[1].split("{GS}")[0]
+    except:
+        return None
+    return f_id
 
 # GUI Helpers
 
@@ -259,6 +321,9 @@ def parse_data(win, win_vals):
     except FileNotFoundError:
         win['-PARSE STATUS-'].update("ERROR; PLEASE SELECT A VALID FILE")
 
+def update_button(button, color, text):
+    button.update(button_color=color)
+    button.update(text)
 
 def verify_gui(job_feeder_data_loc):
     verify_window = verify_window_layout()
@@ -268,6 +333,8 @@ def verify_gui(job_feeder_data_loc):
     part_scanned = False
     err = False
     time_since = time.time()
+    job_feeder_id = 0
+    supplier_part_no = 0
     while True:  # Event Loop
         event, values = verify_window.read(timeout=100, timeout_key="-TIMEOUT-")
 
@@ -276,30 +343,35 @@ def verify_gui(job_feeder_data_loc):
                 winsound.PlaySound("SystemHand", winsound.SND_ALIAS)
                 err = False
             if ((time.time() - time_since) > 0.1) & (val != ""):
+                if part_scanned & valid_physical_feeder(val):
+                    if extract_physical_feeder_id(val) == job_feeder_id:
+                        update_button(verify_window["-MAIN_BUTTON-"], ("black", "green"), "SUCCESSFUL MATCH")
+                        part_scanned = False
+                    else:
+                        update_button(verify_window["-MAIN_BUTTON-"], ("black", "red"), "INVALID FEEDER")
+                    val = ""
+                    continue
+
                 ecia_data = extract_ecia_2d_code(val)
                 val = ""
                 if ecia_data is None:
-                    verify_window["-MAIN_BUTTON-"].update(button_color=("black", "red"))
-                    verify_window["-MAIN_BUTTON-"].update("ERROR: INVALID ECIA DATA")
+                    update_button(verify_window["-MAIN_BUTTON-"], ("black", "red"), "ERROR: INVALID ECIA DATA")
                     err = True
                     continue
                 supplier_part_no = ecia_data["supplier_part_number"]
                 if supplier_part_no is None:
-                    verify_window["-MAIN_BUTTON-"].update(button_color=("black", "red"))
-                    verify_window.FindElement("-MAIN_BUTTON-").update("ERROR: NO PART NO FOUND")
+                    update_button(verify_window["-MAIN_BUTTON-"], ("black", "red"), "ERROR: NO PART NO FOUND")
                     err = True
                 else:
-                    feeder_id = get_feeder_id(job_feeder_data_loc, supplier_part_no)
-                    if feeder_id is None:
-                        verify_window["-MAIN_BUTTON-"].update(button_color=("black", "red"))
-                        verify_window["-MAIN_BUTTON-"].update("PART: " + supplier_part_no +
-                                                              "\n ERROR: NOT IN JOB DATA")
+                    job_feeder_id = get_feeder_id(job_feeder_data_loc, supplier_part_no)
+                    if job_feeder_id is None:
+                        update_button(verify_window["-MAIN_BUTTON-"], ("black", "red"), "PART: " + supplier_part_no +
+                                      "\n ERROR: NOT IN JOB DATA")
                         err = True
 
                     else:
-                        verify_window["-MAIN_BUTTON-"].update(button_color=("black", "#ff8400"))
-                        verify_window["-MAIN_BUTTON-"].update("PART: " + supplier_part_no +
-                                                              "\n FEEDER ID: " + feeder_id)
+                        update_button(verify_window["-MAIN_BUTTON-"], ("black", "#ff8400"), "PART: " +
+                                      supplier_part_no + "\n FEEDER ID: " + job_feeder_id)
                         part_scanned = True
             continue
 
@@ -352,44 +424,6 @@ def run_gui():
             verify_gui(job_feeder_data_loc)
 
     window.close()
-
-
-def valid_ecia_2d_code(code):
-    return "[)>{RS}06{GS}" in code
-
-
-def remove_prefix(text, prefix):
-    return text[text.startswith(prefix) and len(prefix):]
-
-
-def return_ecia_fields(line):
-    data_identifiers = ["1T", "1P", "6D", "4L", "P", "Q", "9D", "10D"]
-    field_names = ["lot_code", "supplier_part_number", "ship_date",
-                   "country_of_origin", "customer_part_number", "Quantity", "date_code_1", "date_code_2"]
-
-    for i in range(0, len(data_identifiers)):
-        if str(line).startswith(data_identifiers[i]):
-            return field_names[i], remove_prefix(line, data_identifiers[i])
-    return None
-
-
-def extract_ecia_2d_code(code):
-    if not valid_ecia_2d_code(code):
-        return None
-
-    try:
-        temp_dict = {}
-        temp = str(code).split("{GS}")
-        temp.remove("[)>{RS}06")
-    except ValueError:
-        return None
-
-    for val in temp:
-        extracted = return_ecia_fields(val)
-        if extracted:
-            temp_dict[extracted[0]] = extracted[1]
-
-    return temp_dict
 
 
 run_gui()

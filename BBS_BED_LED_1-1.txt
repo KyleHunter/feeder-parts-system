@@ -418,7 +418,7 @@ End_of_ID
 &B.QED                                                                                  
 End_of_BD
 &F   0=capacitor_1206                   
-CL31A106MBHNNNE                         
+ERT-J1VP473FM                           
 capacitor_1206                          
 0000000000030000070100000000000000001E1E
 000000000001010000000003000203781E000000

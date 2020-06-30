@@ -133,13 +133,57 @@ def write_syncd_job_data(loc, data):
             writer.writerow(i)
 
 
-def write_match_job_status(first_one, loc, data):
+# Writes part - feeder match info to CSV
+# returns 0 if error, 1 if first match, 2 if second match, 3 if already second matched
+def write_match_job_status(loc, part):
+    # has_part_feeder_matched(loc, "foo")
+    ret = 0
+    row_count = 0
+    second_match = False
+    third_match = False
+    try:
+        with open(loc, 'r', newline='') as file:
+            info = csv.DictReader(file, delimiter=',')
+            for row in info:
+                row_count += 1
+                if row["MANF PART NO"] == part:
+                    second_match = True
+
+                    if row["SECOND MATCH"] == "True":
+                        third_match = True
+                        break
+    except FileNotFoundError:
+        pass
+
+    if row_count == 0:
+        with open(loc, 'w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["MANF PART NO", "SECOND MATCH"])
+            writer.writerow([part, second_match])
+            return 1
+
+    elif (second_match is False) & (third_match is False):
+        with open(loc, 'a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([part, second_match])
+            return 1
+
+    with open(loc, 'r', newline='') as file:
+        rows = csv.reader(file.readlines())
+
     with open(loc, 'w', newline='') as file:
         writer = csv.writer(file)
-        if first_one:
-            writer.writerow(["MANF PART NO", "FIRST MATCH", "SECOND MATCH"])
 
-        writer.writerow(data)
+        for row in rows:
+            if row[0] == part:
+                writer.writerow([part, second_match])
+            else:
+                writer.writerow(row)
+
+    if third_match is True:
+        return 3
+    if second_match is True:
+        return 2
 
 
 def main_window_layout():
@@ -305,6 +349,7 @@ def extract_physical_feeder_id(code):
         return None
     return f_id
 
+
 # GUI Helpers
 
 
@@ -321,9 +366,11 @@ def parse_data(win, win_vals):
     except FileNotFoundError:
         win['-PARSE STATUS-'].update("ERROR; PLEASE SELECT A VALID FILE")
 
+
 def update_button(button, color, text):
     button.update(button_color=color)
     button.update(text)
+
 
 def verify_gui(job_feeder_data_loc):
     verify_window = verify_window_layout()
@@ -334,6 +381,7 @@ def verify_gui(job_feeder_data_loc):
     err = False
     time_since = time.time()
     job_feeder_id = 0
+    job_feeder_slot = 0
     supplier_part_no = 0
     while True:  # Event Loop
         event, values = verify_window.read(timeout=100, timeout_key="-TIMEOUT-")
@@ -345,7 +393,19 @@ def verify_gui(job_feeder_data_loc):
             if ((time.time() - time_since) > 0.1) & (val != ""):
                 if part_scanned & valid_physical_feeder(val):
                     if extract_physical_feeder_id(val) == job_feeder_id:
-                        update_button(verify_window["-MAIN_BUTTON-"], ("black", "green"), "SUCCESSFUL MATCH")
+                        part_matching_times = write_match_job_status("match_job_status.csv", supplier_part_no)
+
+                        if part_matching_times == 1:
+                            update_button(verify_window["-MAIN_BUTTON-"], ("black", "green"), "SUCCESSFUL MATCH")
+
+                        if part_matching_times == 2:
+                            update_button(verify_window["-MAIN_BUTTON-"], ("black", "green"),
+                                          "SUCCESSFUL 2nd MATCH\n FEEDER SLOT: " + job_feeder_slot)
+
+                        if part_matching_times == 3:
+                            update_button(verify_window["-MAIN_BUTTON-"], ("black", "#ff8400"),
+                                          "ALREADY MATCHED\n FEEDER SLOT: " + job_feeder_slot +
+                                          "\nFEEDER ID:" + job_feeder_id)
                         part_scanned = False
                     else:
                         update_button(verify_window["-MAIN_BUTTON-"], ("black", "red"), "INVALID FEEDER")
@@ -364,6 +424,7 @@ def verify_gui(job_feeder_data_loc):
                     err = True
                 else:
                     job_feeder_id = get_feeder_id(job_feeder_data_loc, supplier_part_no)
+                    job_feeder_slot = get_feeder_slot(job_feeder_data_loc, supplier_part_no)
                     if job_feeder_id is None:
                         update_button(verify_window["-MAIN_BUTTON-"], ("black", "red"), "PART: " + supplier_part_no +
                                       "\n ERROR: NOT IN JOB DATA")
